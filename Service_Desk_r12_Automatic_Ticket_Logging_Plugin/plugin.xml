@@ -19,6 +19,7 @@
       <property key="URL" label="URL" type="url" description="The url to which the call is made" default="" />
       <property key="r12 Username" label="r12 Username" type="string" description="Username for log into r12" default="" multiline="false" />
       <property key="r12 Password" label="r12 Password" type="password" description="password for log into r12" default="" />
+      <property key="debug" label="Extended Debug Mode" type="boolean" description="Adds additional information to the logs" default="false" />
     </configuration>
   </extension>
   <extension point="com.dynatrace.diagnostics.pdk.action" id="com.datacom.servicedeskAction.action" name="Service Desk Action Plugin">

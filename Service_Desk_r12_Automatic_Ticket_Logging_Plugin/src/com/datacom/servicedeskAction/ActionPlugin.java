@@ -32,7 +32,6 @@ public class ActionPlugin implements ActionV2 {
 	private String userid;
 	private String password;
 	private String area;
-	private String status = "Assigned";
 	private String configItem;
 	private String group;
 	private String summary;
@@ -42,6 +41,7 @@ public class ActionPlugin implements ActionV2 {
 
 	public String sid;
 	public String ticketnumber;
+	public boolean debug;
 
 	private static final Logger log = Logger.getLogger(ActionPlugin.class.getName());
 	/**
@@ -121,9 +121,11 @@ public class ActionPlugin implements ActionV2 {
 			url = env.getConfigUrl("URL");
 			userid = env.getConfigString("r12 Username");
 			password = env.getConfigPassword("r12 Password");
-			summary = incident.getMessage();
+			debug = env.getConfigBoolean("debug");
+			summary = getSummary(incident);
 			description = getDescription(incident);
-			//Log data gathered for debugging
+
+			if(debug == true){//Log data gathered for debugging
 			log.info("Incident " + summary + " triggered.");
 			log.info("Sending ticket to Service Desk for Tenant:" + tenant);
 			log.info(" Incident area:" + area);
@@ -134,24 +136,37 @@ public class ActionPlugin implements ActionV2 {
 			log.info("Username:" + userid);
 			//send Data off to Service Desk, returns a success status if successful, and an error status if not
 			return ticketLogged(password);
+			}
+			else{
+				return ticketLogged(password);
+			}
 		}
 		return new Status(Status.StatusCode.Success);
 	}
 
 public Status ticketLogged(String pass) throws Exception {
 	try{
+			log.info("Begin Ticket Logging");
 			String sid = casdLogin(url, pass);
-			log.info("SID " + sid);
+			if(debug == true){
+				log.info("SID " + sid);
+			}
 
-		if (sid.equals("failed")){
+		if (sid.equals("failed") || sid.isEmpty()){
+			log.info("Login failed");
 			return new Status(Status.StatusCode.ErrorInternalUnauthorized);
 		}
 		else{
 			String ticketnumber = logTicket(url, sid);
+			if (ticketnumber.equals("failed")){
+				casdLogout(url,sid);
+				return new Status(Status.StatusCode.ErrorInternalUnauthorized);
+			}
+			else{
 			log.info("Ticket Number: " + ticketnumber);
-
 			log.info("logging out");
 			return casdLogout(url,sid);
+			}
 		}
 	}
 	catch(Exception e){
@@ -168,16 +183,20 @@ public String parsesoap(SOAPMessage message, String node1){
 		Node node = nodes.item(0);
 		erro = node != null ? node.getTextContent() : "";
 
-		if (erro.equals("")){
+		if(erro.equals("")){
 			SOAPBody bodyy = message.getSOAPBody();
 			NodeList nodess = bodyy.getElementsByTagName(node1);
 			String objecta = null;
 			Node nodee = nodess.item(0);
 			objecta = nodee != null ? nodee.getTextContent() : "";
+
 			return objecta;
-		}
-		else {
+			}
+		else{
+			//debugging
+			if(debug == true){
 			log.info("error found, error code:" + erro);
+			}
 			return "failed";
 		}
 	}
@@ -228,6 +247,10 @@ public String gethandle(String sid, String typ, String val){
 				String id = gethandleid(sid, "cnt", "id", "email_address = " + valu);
 			return id;
 }
+			else if (typ.equals("User")){
+				String id = gethandleid(sid, "cnt", "id", "last_name = " + valu);
+			return id;
+}
 			else if (typ.equals("Group")){
 				String id = gethandleid(sid, "grp", "id", "last_name = " + valu);
 			return id;
@@ -241,32 +264,50 @@ public String gethandle(String sid, String typ, String val){
 			return id;
 }
 	else {
-		log.info("not a valid type");
+		log.info("not a valid handle type");
 		return "failed";
 	}
 }
 
 public String casdLogin(URL url, String passw){
 	try{
+						String logger = "DEMNZ" + "\\" + userid;
+						// String logger = "datacom-nz" + "\\" + "kylec";
+
 						// Create message
-						SOAPMessage login = createSOAPloginrequest(userid, passw);
+						SOAPMessage login = createSOAPloginrequest(logger, passw);
+						// SOAPMessage login = createSOAPloginrequest(logger, "");
+
 						// trust ssl
 						doTrustToCertificates();
-						log.info("certs trusted");
+
 						// Create SOAP Connection
             SOAPConnectionFactory soapConnectionFactory = SOAPConnectionFactory.newInstance();
             SOAPConnection soapConnection = soapConnectionFactory.createConnection();
 
             // Send SOAP Message to SOAP Server
             SOAPMessage soaploginResponse = soapConnection.call(login, url);
-						log.info("login sent");
 
 						//process SOAP Response
 						String sidContent = parsesoap(soaploginResponse, "SID");
 
 						soapConnection.close();
 
-			return sidContent;
+						if(debug == true){
+							//debugging
+							log.info("login sent");
+							String debugging = xmltostring(soaploginResponse);
+							log.info(debugging);
+						}
+
+						if(sidContent.equals("")){
+							log.info("Login returned no value, confirm URL.");
+							return "failed";
+						}
+
+						else{
+							return sidContent;
+						}
 		}
 			catch(Exception e){
 				log.info("Unable to log in, exception: "+e.getMessage());
@@ -274,53 +315,59 @@ public String casdLogin(URL url, String passw){
 			}
 	}
 
-
 	public String gethandleid(String sid, String factory, String retu, String val){
 		try{
 							// Create message
 							SOAPMessage select = createselect(sid, factory, retu, val);
+
 							// trust ssl
 							doTrustToCertificates();
-							log.info("certs trusted");
 
 							// Create SOAP Connection
 	            SOAPConnectionFactory soapConnectionFactory = SOAPConnectionFactory.newInstance();
 	            SOAPConnection soapConnection = soapConnectionFactory.createConnection();
 
-							//debugging
-							//String debug = xmltostring(select);
-							//log.info(debug);
-
 	            // Send SOAP Message to SOAP Server
 	            SOAPMessage soapselectResponse = soapConnection.call(select, url);
-							log.info("doSelect sent");
+
+							if(debug == true){
+								//debugging
+								String debugging = xmltostring(select);
+								log.info(debugging);
+								log.info("doSelect sent");
+							}
 
 							//process SOAP Response
 							String obtype = parsesoap(soapselectResponse, "id");
 
 							if (obtype.equals("failed")){
 								//retry
-								log.info("Unable to gather id");
 								SOAPMessage secondattempt = soapConnection.call(select, url);
-								log.info("trying again");
 								String sectry = parsesoap(secondattempt, "id");
 
+								if(debug == true){
 								//debugging
-								//String fulls = xmltostring(secondattempt);
-								//log.info(fulls);
+								String debugging = xmltostring(secondattempt);
+								log.info("trying again");
+								log.info(debugging);
+								}
 
 								soapConnection.close();
 
 									if(sectry.equals("")){
-										log.info("ID is blank, possibly bad search parameters");
 										return "failed";
 								}
 									else{
+
+										if(debug == true){
+										log.info("ID has come back successfully");
+										}
+
 										return sectry;
 								}
 							}
 							else if(obtype.equals("")){
-								log.info("ID is blank, possibly bad search parameters");
+								log.info("Returned ID is blank on the first attempt, check URL");
 								soapConnection.close();
 								return obtype;
 							}
@@ -338,6 +385,7 @@ public String casdLogin(URL url, String passw){
 	public String logTicket(URL url, String sid){
 		try{
 							//Get attrVals
+							String logger = gethandle(sid, "User", userid);
 							String customer = gethandle(sid, "Contact", affectedcustomer);
 							String sum = "Dynatrace AutoTicket: " + summary;
 							String iss_area = gethandle(sid, "Category", area);
@@ -345,15 +393,27 @@ public String casdLogin(URL url, String passw){
 							String asgrp = gethandle(sid, "Group", group);
 							String ci = gethandle(sid, "CI", configItem);
 
+							// String customer = "test";
+							// String sum = "test";
+							// String iss_area = "test";
+							// String pri = "test";
+							// String asgrp = "test";
+
+
 							if(customer.equals("failed") || iss_area.equals("failed") || pri.equals("failed") || asgrp.equals("failed") || ci.equals("failed")){
+								log.info("One of the following values was not present in CASD, please confirm entered details.");
+								log.info("Logging User handle:" + logger);
+								log.info("Affected End User handle:" + customer);
+								log.info("Category handle:" + iss_area);
+								log.info("Group handle:" + asgrp);
+								log.info("CI handle:" + ci);
 								throw new Exception("One of the required fields is invalid");
 							}
 							else{
 								// Create message
-								SOAPMessage ticket = createSOAPticketrequest(sid, customer, pri, sum, iss_area, asgrp, ci);
+								SOAPMessage ticket = createSOAPticketrequest(sid, logger, customer, pri, sum, iss_area, asgrp, ci);
 								// trust ssl
 								doTrustToCertificates();
-								log.info("certs trusted");
 
 								// Create SOAP Connection
 	            	SOAPConnectionFactory soapConnectionFactory = SOAPConnectionFactory.newInstance();
@@ -362,12 +422,14 @@ public String casdLogin(URL url, String passw){
 	            	//Send SOAP Message to SOAP Server
 	            	SOAPMessage soapticketResponse = soapConnection.call(ticket, url);
 
+								if(debug == true){
 								//debugging
 								String messagecontent = xmltostring(soapticketResponse);
 								log.info(messagecontent);
+								}
 
 								//parse the response
-								String ticketnumber = parsesoap(soapticketResponse, "newTicketNumber");
+								String ticketnumber = parsesoap(soapticketResponse, "newRequestNumber");
 
 								if(ticketnumber.equals("failed")){
 									//retry
@@ -375,11 +437,13 @@ public String casdLogin(URL url, String passw){
 									SOAPMessage secondattempt = soapConnection.call(ticket, url);
 									log.info("trying again");
 
+									if(debug == true){
 									//debugging
 									String fulls = xmltostring(secondattempt);
 									log.info(fulls);
+									}
 
-									String sectry = parsesoap(secondattempt, "newTicketNumber");
+									String sectry = parsesoap(secondattempt, "newRequestNumber");
 
 									soapConnection.close();
 
@@ -408,17 +472,17 @@ public String casdLogin(URL url, String passw){
 								SOAPMessage logout = createSOAPlogoutrequest(sid);
 								// trust ssl
 								doTrustToCertificates();
-								log.info("certs trusted");
 								// Create SOAP Connection
 		            SOAPConnectionFactory soapConnectionFactory = SOAPConnectionFactory.newInstance();
 		            SOAPConnection soapConnection = soapConnectionFactory.createConnection();
 
 		            // Send SOAP Message to SOAP Server
 		           	soapConnection.call(logout, url);
-								log.info("message sent");
 
 		            soapConnection.close();
 								log.info("logged out");
+								log.info("End Ticket Logging");
+
 					return new Status(Status.StatusCode.Success);
 				}
 				catch(Exception e){//change to whatever exceptions can be generated by trying to log out
@@ -437,12 +501,14 @@ public String casdLogin(URL url, String passw){
 		String xsdURI = "http://www.w3.org/2001/XMLSchema";
 		String xsiURI = "http://www.w3.org/2001/XMLSchema-instance";
 		String s0URI = "http://www.ca.com/UnicenterServicePlus/ServiceDesk";
+		String envURI = "http://schemas.xmlsoap.org/soap/envelope/";
 
 		// SOAP Envelope
 		SOAPEnvelope envelope = soapPart.getEnvelope();
 		envelope.addNamespaceDeclaration("xsd", xsdURI);
 		envelope.addNamespaceDeclaration("xsi", xsiURI);
 		envelope.addNamespaceDeclaration("s0", s0URI);
+		envelope.addNamespaceDeclaration("env", envURI);
 		/*
 		Constructed SOAP Request Message:
 		<env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:s0="http://www.ca.com/UnicenterServicePlus/ServiceDesk" xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
@@ -463,7 +529,13 @@ public String casdLogin(URL url, String passw){
 		MimeHeaders headers = soapMessage.getMimeHeaders();
     headers.addHeader("SOAPAction", s0URI  + "login");
 		soapMessage.saveChanges();
+
+		if(debug == true){
+		//debugging
 		log.info("login message created");
+		String debug = xmltostring(soapMessage);
+		log.info(debug);
+		}
 
 		return soapMessage;
 	}
@@ -501,7 +573,7 @@ public String casdLogin(URL url, String passw){
 		soapBodyElem.addChildElement("SID").addTextNode(sid);
 		soapBodyElem.addChildElement("objectType").addTextNode(factory);
 		soapBodyElem.addChildElement("WhereClause").addTextNode(val);
-		soapBodyElem.addChildElement("MaxRows").addTextNode("5");
+		soapBodyElem.addChildElement("MaxRows").addTextNode("50");
 		SOAPElement soapBodyElem1 = soapBodyElem.addChildElement("Attributes");
 		soapBodyElem1.addChildElement("string").addTextNode(retu);
 		//soapBodyElem1.addChildElement("string").addTextNode("id");
@@ -511,11 +583,16 @@ public String casdLogin(URL url, String passw){
 
 		soapMessage.saveChanges();
 
-		log.info("message created");
+		if(debug == true){
+		//debugging
+		String debug = xmltostring(soapMessage);
+		log.info(debug);
+		}
+
 		return soapMessage;
 	}
 
-	public SOAPMessage createSOAPticketrequest(String sid, String cnthandle, String priorit, String summ, String iss_ar, String assignee, String configid) throws Exception {
+	public SOAPMessage createSOAPticketrequest(String sid, String logger, String cnthandle, String priorit, String summ, String iss_ar, String assignee, String configid) throws Exception {
 		MessageFactory messageFactory = MessageFactory.newInstance();
 		SOAPMessage soapMessage = messageFactory.createMessage();
 		SOAPPart soapPart = soapMessage.getSOAPPart();
@@ -544,45 +621,46 @@ public String casdLogin(URL url, String passw){
 
 		// SOAP Body
 		SOAPBody soapBody = envelope.getBody();
-		SOAPElement soapBodyElem = soapBody.addChildElement("createIssue", "s0");
-		log.info("got main");
-		soapBodyElem.addChildElement("SID").addTextNode(sid);
-		log.info("added sid");
-		soapBodyElem.addChildElement("creatorHandle").addTextNode("cnt:"+ cnthandle);
-		log.info("added handle");
-		SOAPElement soapBodyElem1 = soapBodyElem.addChildElement("attrVals");
-		soapBodyElem1.addChildElement("string").addTextNode("requestor");
-		soapBodyElem1.addChildElement("string").addTextNode("cnt:" + cnthandle);
-		soapBodyElem1.addChildElement("string").addTextNode("affected_contact");
-		soapBodyElem1.addChildElement("string").addTextNode("cnt:" + cnthandle);
-		soapBodyElem1.addChildElement("string").addTextNode("summary");
-		soapBodyElem1.addChildElement("string").addTextNode(summ);
-		soapBodyElem1.addChildElement("string").addTextNode("description");
-		soapBodyElem1.addChildElement("string").addTextNode(description);
-		soapBodyElem1.addChildElement("string").addTextNode("priority");
-		soapBodyElem1.addChildElement("string").addTextNode(priorit);
-		soapBodyElem1.addChildElement("string").addTextNode("category");
-		soapBodyElem1.addChildElement("string").addTextNode("pcat:" + iss_ar);
-		soapBodyElem1.addChildElement("string").addTextNode("group");
-		soapBodyElem1.addChildElement("string").addTextNode("grp:" + assignee);
-		soapBodyElem1.addChildElement("string").addTextNode("nr");
-		soapBodyElem1.addChildElement("string").addTextNode("nr:" + configid);
+		SOAPElement soapBodyElem = soapBody.addChildElement("createRequest", "s0");
+			soapBodyElem.addChildElement("SID").addTextNode(sid);
+			soapBodyElem.addChildElement("creatorHandle").addTextNode("cnt:"+ logger);
+			SOAPElement soapBodyElem1 = soapBodyElem.addChildElement("attrVals");
+			soapBodyElem1.addChildElement("string").addTextNode("type");
+			soapBodyElem1.addChildElement("string").addTextNode("crt:182");
+			soapBodyElem1.addChildElement("string").addTextNode("customer");
+			soapBodyElem1.addChildElement("string").addTextNode("cnt:" + cnthandle);
+			soapBodyElem1.addChildElement("string").addTextNode("summary");
+			soapBodyElem1.addChildElement("string").addTextNode(summ);
+			soapBodyElem1.addChildElement("string").addTextNode("description");
+			soapBodyElem1.addChildElement("string").addTextNode(description);
+			soapBodyElem1.addChildElement("string").addTextNode("priority");
+			soapBodyElem1.addChildElement("string").addTextNode(priorit);
+			soapBodyElem1.addChildElement("string").addTextNode("category");
+			soapBodyElem1.addChildElement("string").addTextNode("pcat:" + iss_ar);
+			soapBodyElem1.addChildElement("string").addTextNode("group");
+			soapBodyElem1.addChildElement("string").addTextNode("grp:" + assignee);
+			soapBodyElem1.addChildElement("string").addTextNode("affected_resource");
+			soapBodyElem1.addChildElement("string").addTextNode("nr:" + configid);
+			soapBodyElem1.addChildElement("string").addTextNode("z_reporting_method");
+			soapBodyElem1.addChildElement("string").addTextNode("rptmeth:400003");
 
-		SOAPElement soapBodyElem2 = soapBodyElem.addChildElement("propertyValues");
-		soapBodyElem2.addChildElement("string").addTextNode("");
-
-		soapBodyElem.addChildElement("template").addTextNode("");
-
-		SOAPElement soapBodyElem3 = soapBodyElem.addChildElement("attributes");
-		soapBodyElem3.addChildElement("string").addTextNode("");
-
-		soapBodyElem.addChildElement("newIssueHandle");
-		soapBodyElem.addChildElement("newIssueNumber");
+			soapBodyElem.addChildElement("propertyValues");
+			soapBodyElem.addChildElement("template");
+			soapBodyElem.addChildElement("attributes");
+			soapBodyElem.addChildElement("newRequestHandle");
+			soapBodyElem.addChildElement("newRequestNumber");
 
 		MimeHeaders headers = soapMessage.getMimeHeaders();
     headers.addHeader("SOAPAction", s0URI  + "createTicket");
 
 		soapMessage.saveChanges();
+
+		if(debug == true){
+		//debugging
+		String debug = xmltostring(soapMessage);
+		log.info(debug);
+		}
+
 		return soapMessage;
 	}
 
@@ -601,7 +679,6 @@ public String casdLogin(URL url, String passw){
 		logoutenvelope.addNamespaceDeclaration("xsd", xsdURI);
 		logoutenvelope.addNamespaceDeclaration("xsi", xsiURI);
 		logoutenvelope.addNamespaceDeclaration("s0", s0URI);
-		log.info("envelope created");
 
 		/*
 		Constructed SOAP Request Message:
@@ -620,12 +697,18 @@ public String casdLogin(URL url, String passw){
 		SOAPElement soaplogoutBodyElem = soaplogoutBody.addChildElement("logout", "s0");
 		SOAPElement soaplogoutBodyElem1 = soaplogoutBodyElem.addChildElement("SID", "s0");
 		soaplogoutBodyElem1.addTextNode(sid);
-		log.info("body created");
 
 		MimeHeaders logoutheaders = soaplogoutMessage.getMimeHeaders();
     logoutheaders.addHeader("SOAPAction", s0URI  + "logout");
 
 		soaplogoutMessage.saveChanges();
+
+		if(debug == true){
+		//debugging
+		String debug = xmltostring(soaplogoutMessage);
+		log.info(debug);
+		}
+
 		return soaplogoutMessage;
 	}
 	/**
@@ -633,6 +716,11 @@ public String casdLogin(URL url, String passw){
 	 * @param Incident incident
 	 * @return String Description
 	 */
+	private String getSummary(Incident incident){
+		StringBuilder summ = new StringBuilder();
+		summ.append("Incident violation:"+incident.getIncidentRule().getName());
+		return summ.toString();
+	}
 	private String getDescription(Incident incident){
 		StringBuilder desc = new StringBuilder();
 		desc.append("Incident from Dynatrace:"+summary);
@@ -643,12 +731,12 @@ public String casdLogin(URL url, String passw){
 		desc.append("\n    Description:"+incident.getIncidentRule().getDescription());
 		desc.append("\n\nViolations:");
 		for(Violation v: incident.getViolations()){
-			desc.append("\n    Violated Measure:"+v.getViolatedMeasure().getName());
-			desc.append("\n        Description:"+v.getViolatedMeasure().getDescription());
+			desc.append("\n       Violated Measure Description:"+v.getViolatedMeasure().getDescription());
 			desc.append("\n        Source:"+v.getViolatedMeasure().getSource().toString());
 		}
 		return desc.toString();
 	}
+
 
 	static public void doTrustToCertificates() throws Exception {
 	        Security.addProvider(new com.sun.net.ssl.internal.ssl.Provider());
